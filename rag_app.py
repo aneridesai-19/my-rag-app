@@ -74,7 +74,7 @@ def search_index(query, chunks, index, vectors, vectorizer, k=3):
 def get_openai_answer(query, context, chat_history):
     system_prompt = f"""You are a helpful assistant.
 Only answer using the information provided in the context below.
-If the answer is not explicitly mentioned, respond with: \"I couldn't find that information in the document.\"
+If the answer is not explicitly mentioned, respond with: "I couldn't find that information in the document."
 
 Context:
 {context}
@@ -99,14 +99,22 @@ if "docs" not in st.session_state:
     st.session_state.docs = load_docs()
 
 if "current_chat_id" not in st.session_state:
-    # Initialize a default chat
     new_id = str(uuid.uuid4())
     st.session_state.current_chat_id = new_id
-    if new_id not in st.session_state.chats:
-        st.session_state.chats[new_id] = {"name": "New Chat", "messages": []}
+    st.session_state.chats[new_id] = {"name": "New Chat", "messages": []}
 
-if "current_doc_id" not in st.session_state:
-    st.session_state.current_doc_id = None
+if "current_doc_id" not in st.session_state or st.session_state.current_doc_id not in st.session_state.docs:
+    if st.session_state.docs:
+        last_doc_id = list(st.session_state.docs.keys())[-1]
+        st.session_state.current_doc_id = last_doc_id
+        chunks = split_text(st.session_state.docs[last_doc_id]["text"])
+        index, vectors, vectorizer = build_vectorstore(chunks)
+        st.session_state.chunks = chunks
+        st.session_state.index = index
+        st.session_state.vectors = vectors
+        st.session_state.vectorizer = vectorizer
+    else:
+        st.session_state.current_doc_id = None
 
 if "index" not in st.session_state:
     st.session_state.index = None
@@ -146,7 +154,6 @@ st.markdown(
 with st.sidebar:
     st.title("📁 RAG Chatbot")
 
-    # Upload PDFs
     uploaded_files = st.file_uploader("Upload PDFs", type="pdf", accept_multiple_files=True)
 
     if uploaded_files:
@@ -157,14 +164,11 @@ with st.sidebar:
                 "name": file.name,
                 "text": text
             }
+            st.session_state.current_doc_id = file_id  # Auto select last uploaded
+
         save_docs(st.session_state.docs)
         st.success("✅ Files uploaded and saved!")
 
-        # If no doc selected, auto select last uploaded
-        if st.session_state.current_doc_id is None:
-            st.session_state.current_doc_id = file_id
-
-        # Build vectorstore for last uploaded doc
         chunks = split_text(text)
         index, vectors, vectorizer = build_vectorstore(chunks)
         st.session_state.chunks = chunks
@@ -174,7 +178,6 @@ with st.sidebar:
 
         st.markdown("---")
 
-    # Saved Documents Section below Upload PDFs
     st.markdown("### 📄 Saved Documents")
     for doc_id, doc in list(st.session_state.docs.items())[::-1]:
         is_selected = (doc_id == st.session_state.current_doc_id)
@@ -191,44 +194,28 @@ with st.sidebar:
                     st.session_state.index = index
                     st.session_state.vectors = vectors
                     st.session_state.vectorizer = vectorizer
-
-                    # Optionally clear chat selection when doc selected:
-                    st.session_state.current_chat_id = None
                     st.rerun()
             with col2:
-                delete_key = f"del-doc-{doc_id}"
-                if st.button("🗑️", key=delete_key):
+                if st.button("🗑️", key=f"del-doc-{doc_id}"):
                     st.session_state.docs.pop(doc_id, None)
                     save_docs(st.session_state.docs)
-
-                    # Clear state if the deleted doc was selected
                     if st.session_state.current_doc_id == doc_id:
                         st.session_state.current_doc_id = None
                         st.session_state.chunks = []
                         st.session_state.index = None
                         st.session_state.vectors = None
                         st.session_state.vectorizer = None
-
                     st.rerun()
-
 
     st.markdown("---")
 
-    # New Chat button below Saved Docs
     if st.button("➕ New Chat"):
         new_id = str(uuid.uuid4())
         st.session_state.current_chat_id = new_id
         st.session_state.chats[new_id] = {"name": f"Chat {len(st.session_state.chats) + 1}", "messages": []}
-        # Clear doc selection and vector index on new chat? (You can decide)
-        st.session_state.current_doc_id = None
-        st.session_state.index = None
-        st.session_state.vectors = None
-        st.session_state.vectorizer = None
-        st.session_state.chunks = []
         save_chats(st.session_state.chats)
         st.rerun()
 
-    # Chats list below New Chat button
     st.markdown("### 💬 Chats")
     for cid, chat in list(st.session_state.chats.items())[::-1]:
         is_active = (cid == st.session_state.current_chat_id)
@@ -240,8 +227,7 @@ with st.sidebar:
                     label="",
                     value=chat["name"],
                     key=f"chat-rename-{cid}",
-                    label_visibility="collapsed",
-                    placeholder="Chat name"
+                    label_visibility="collapsed"
                 )
                 if new_name != chat["name"]:
                     st.session_state.chats[cid]["name"] = new_name
@@ -268,12 +254,7 @@ with st.sidebar:
 st.title("🤖 Ask Your Documents")
 
 if st.session_state.current_doc_id:
-    chat_history = None
-    if st.session_state.current_chat_id:
-        chat = st.session_state.chats.get(st.session_state.current_chat_id, {"messages": []})
-        chat_history = chat["messages"]
-    else:
-        chat_history = []
+    chat_history = st.session_state.chats.get(st.session_state.current_chat_id, {}).get("messages", [])
 
     for msg in chat_history:
         role, content = msg["role"], msg["content"]
@@ -286,7 +267,6 @@ if st.session_state.current_doc_id:
 
     if user_input:
         if st.session_state.current_chat_id is None:
-            # Create a new chat automatically if none
             new_id = str(uuid.uuid4())
             st.session_state.current_chat_id = new_id
             st.session_state.chats[new_id] = {"name": f"Chat {len(st.session_state.chats)+1}", "messages": []}
@@ -306,6 +286,5 @@ if st.session_state.current_doc_id:
         st.session_state.chats[st.session_state.current_chat_id] = chat
         save_chats(st.session_state.chats)
         st.rerun()
-
 else:
-    st.info("Please upload and select a document from the sidebar to start chatting.")
+    st.info("Please upload a PDF document to begin.")
