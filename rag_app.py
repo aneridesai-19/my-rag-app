@@ -58,7 +58,6 @@ def split_text(text, chunk_size=500, overlap=50):
     return chunks
 
 def build_vectorstore(text_chunks):
-    global vectorizer
     vectorizer = TfidfVectorizer().fit(text_chunks)
     vectors = vectorizer.transform(text_chunks).toarray().astype('float32')
     dim = vectors.shape[1]
@@ -99,31 +98,39 @@ if "docs" not in st.session_state:
     st.session_state.docs = load_docs()
 
 if "current_chat_id" not in st.session_state:
-    # Initialize a default chat
+    # Initialize a default chat if none exist
     new_id = str(uuid.uuid4())
     st.session_state.current_chat_id = new_id
     if new_id not in st.session_state.chats:
         st.session_state.chats[new_id] = {"name": "New Chat", "messages": []}
 
-if "current_doc_id" not in st.session_state:
-    # If docs exist, select last uploaded doc by default
-    if st.session_state.docs:
-        st.session_state.current_doc_id = list(st.session_state.docs.keys())[-1]
-    else:
-        st.session_state.current_doc_id = None
-
-if "index" not in st.session_state:
-    st.session_state.index = None
-if "vectors" not in st.session_state:
-    st.session_state.vectors = None
-if "vectorizer" not in st.session_state:
-    st.session_state.vectorizer = None
-if "chunks" not in st.session_state:
-    st.session_state.chunks = []
-
-# Add flag to control file upload processing
 if "uploaded_files_processed" not in st.session_state:
     st.session_state.uploaded_files_processed = False
+
+# -- AUTOLOAD last saved document and build vectorstore --
+
+if "current_doc_id" not in st.session_state or st.session_state.current_doc_id is None:
+    if st.session_state.docs:
+        # Pick last saved document ID
+        last_doc_id = list(st.session_state.docs.keys())[-1]
+        st.session_state.current_doc_id = last_doc_id
+
+        # Build vectorstore from that doc text
+        doc_text = st.session_state.docs[last_doc_id]["text"]
+        chunks = split_text(doc_text)
+        index, vectors, vectorizer = build_vectorstore(chunks)
+
+        st.session_state.chunks = chunks
+        st.session_state.index = index
+        st.session_state.vectors = vectors
+        st.session_state.vectorizer = vectorizer
+    else:
+        # No saved docs
+        st.session_state.current_doc_id = None
+        st.session_state.chunks = []
+        st.session_state.index = None
+        st.session_state.vectors = None
+        st.session_state.vectorizer = None
 
 # ------------------ SIDEBAR CSS & UI ------------------
 
@@ -139,11 +146,11 @@ st.markdown(
         margin-left: 4px;
     }
     .active-chat > button {
-        background-color: #000 !important;
+        background-color: #2f2f2f !important;
         color: white !important;
     }
     .active-doc > button {
-        background-color: #000 !important;
+        background-color: #2f2f2f !important;
         color: white !important;
     }
     </style>
@@ -236,9 +243,9 @@ with st.sidebar:
 
                         # If any docs remain, select last uploaded doc
                         if st.session_state.docs:
-                            st.session_state.current_doc_id = list(st.session_state.docs.keys())[-1]
-                            # Rebuild vectorstore for this doc
-                            doc = st.session_state.docs[st.session_state.current_doc_id]
+                            last_doc_id = list(st.session_state.docs.keys())[-1]
+                            st.session_state.current_doc_id = last_doc_id
+                            doc = st.session_state.docs[last_doc_id]
                             chunks = split_text(doc["text"])
                             index, vectors, vectorizer = build_vectorstore(chunks)
                             st.session_state.chunks = chunks
@@ -255,7 +262,7 @@ with st.sidebar:
         new_id = str(uuid.uuid4())
         st.session_state.current_chat_id = new_id
         st.session_state.chats[new_id] = {"name": f"Chat {len(st.session_state.chats) + 1}", "messages": []}
-        # Clear doc selection and vector index on new chat? (You can decide)
+        # Clear doc selection and vector index on new chat? (optional)
         st.session_state.current_doc_id = None
         st.session_state.index = None
         st.session_state.vectors = None
@@ -304,12 +311,9 @@ with st.sidebar:
 st.title("🤖 Ask Your Documents")
 
 if st.session_state.current_doc_id:
-    chat_history = None
-    if st.session_state.current_chat_id:
-        chat = st.session_state.chats.get(st.session_state.current_chat_id, {"messages": []})
-        chat_history = chat["messages"]
-    else:
-        chat_history = []
+    chat_history = []
+    if st.session_state.current_chat_id and st.session_state.current_chat_id in st.session_state.chats:
+        chat_history = st.session_state.chats[st.session_state.current_chat_id]["messages"]
 
     for msg in chat_history:
         role, content = msg["role"], msg["content"]
